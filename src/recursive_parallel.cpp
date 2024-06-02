@@ -1,13 +1,14 @@
 /* Carlos Cardona-Giraldo 2024 */
 #include <iostream>
 #include <cmath>
-#include <fstream>
 #include <omp.h>
+#include <fstream>
+#include <stdio.h>
 #include <chrono>
-#include <thread>
-#include <future>
 #include <vector>
-   
+
+//#include "include/cx.h"
+
 using namespace std;
 
 using std::chrono::duration;
@@ -15,12 +16,8 @@ using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
 using std::milli;
 
-const int n = 14;
-
-struct Array2D {
-    double arr[n][n];
-    bool non_phys;
-};
+const double g = 1;
+const double w = -5;
 
 void print_time( high_resolution_clock::time_point startTime,
                    high_resolution_clock::time_point endTime) {
@@ -28,7 +25,7 @@ void print_time( high_resolution_clock::time_point startTime,
          duration_cast<duration<double, milli> >(endTime - startTime).count());
 }
 
-double xs(int s, double E, double g, double w, double x2) {
+double xs(int s, double E, double x2) {
     if (s % 2 == 1 || s < 0) {
         return 0;
     } else if (s == 0) {
@@ -36,72 +33,58 @@ double xs(int s, double E, double g, double w, double x2) {
     } else if (s == 2) {
         return x2;
     } else {
-        return (4 * (s - 3) * E * xs(s - 4, E, g, w, x2) + (s - 3) * (s - 4) * (s - 5) * xs(s - 6, E, g, w, x2) - 4 * w * (s - 2) * xs(s - 2, E, g, w, x2)) / (4 * g * (s - 1));
+        return (4 * (s - 3) * E * xs(s - 4, E, x2) + (s - 3) * (s - 4) * (s - 5) * xs(s - 6, E, x2) - 4 * w * (s - 2) * xs(s - 2, E, x2)) / (4 * g * (s - 1));
     }
 }
 
-Array2D getHankel(double e, double  g, double w, double x2) {
-    Array2D var;
-    double hij;
-    int i, j;
-    
-    ///#pragma omp parallel for shared(hij, var)  private(i, j)
-
-    for ( i = 0; i < n; ++i) {
-        for ( j = 0; j < n; ++j) {
-          hij  = xs(i + j, e, g, w, x2);
-	  var.arr[i][j]=hij;
-	// nth = omp_get_thread_num();
-        // std::cout << "num of threats:  "<< nth<<  std::endl;
+bool getCholesky(double e, double x2, const int N)
+{
+  double *hij = (double *)malloc(N * N * sizeof(double));
+  double *l = (double *)malloc(N * N * sizeof(double));
+  double sum;
+  bool non_phys;
+  volatile bool flag=false; 
+  //fill hankel
+  for (int i = 0; i < N; ++i) {
+    for (int j = 0; j < N; ++j) {
+	hij[i*N+j]  = xs(i + j, e, x2);
         }
     }
-    return var;
-}
 
-
-Array2D getCholesky(double e, double g, double w, double x2) {
-    Array2D var;
-    Array2D hankel = getHankel(e, g, w, x2);
-    int i, j, k;
-    double sum; 
-    ///#pragma omp parallel for reduction(+:sum)
-    for ( j = 0; j < n; ++j) {
+   for (int j = 0; j < N; ++j) {
         sum = 0;
-	volatile bool flag=false;
+
         for (int k = 0; k < j; ++k) {
-            sum += var.arr[j][k] * var.arr[j][k];
+            sum += l[j*N+k] * l[j*N+k];
         }
-        var.arr[j][j] = sqrt(hankel.arr[j][j] - sum);
-        for (int i = j + 1; i < n; ++i) {
-            sum = 0;
-	    if(flag) continue;
+        l[j*N+j] = sqrt(hij[j*N+j] - sum);
+        for (int i = j + 1; i < N; ++i) {
+	  sum = 0;
+	  if(flag) continue;
             for (int k = 0; k < j; ++k) {
-                sum += var.arr[i][k] * var.arr[j][k];
+                sum += l[i*N+k] * l[j*N+k];
             }
-            var.arr[i][j] = (1.0 / var.arr[j][j] * (hankel.arr[i][j] - sum));
-            var.non_phys = isnan(var.arr[i][j]);
-            if (var.non_phys) {
-                flag=true;
-            }
+            l[i*N+j] = (1.0 / l[j*N+j] * (hij[i*N+j] - sum));
+	    //	    std::cout<<"lss[i,j]: "<< l[i*N+j]<<std::endl;
+            non_phys = isnan(l[i*N+j]);
+	    //std::cout<<"non_phys: "<<non_phys<<std::endl;
+	    
+	     if (non_phys) {
+	       flag=true;
+		 
+	     }
         }
     }
-    return var;
+   delete[] hij;
+   delete[] l;
+   return flag;
 }
-
-
-void printArray(Array2D var) {
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-            std::cout << var.arr[i][j] << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-
 int main() {
-  Array2D L;
-  int xsize, i, j;
-  double xss, ess, xlower, xupper, elower, eupper, g = 1.0, w = -5.0;
+  int N, xsize;
+  double ess, xss, xlower, xupper, elower, eupper;
+
+  std::cout << "Enter the size of the Hankel matrix: ";
+    std::cin >> N;
  
     std::cout << "Enter the size of the x-grid: ";
     std::cin >> xsize;
@@ -115,39 +98,41 @@ int main() {
     std::cout << "Enter the upper limit for e-region: ";
     std::cin >> eupper;
 
-    double xinter = xupper - xlower;
-    double einter = eupper - elower;
-    int xs2 = 5000000; /// max xsize, fixed before compiling to avoid dynamic alloc.
+    const double& xinter = xupper - xlower;
+    const double& einter = eupper - elower;
+    const int xs2 = 5000000; /// max xsize, fixed before compiling to avoid dynamic alloc.
     double* ees = new double[xs2];
     double* xxs = new double[xs2];
-   
+    // std::fill(ees, ees + xs2, 0);
+    // std::fill(xxs, xxs + xs2, 0);
     const auto startTime = high_resolution_clock::now();
-    
-#pragma omp parallel private(xss, ess, L) /// shared(xss, ess, ees,xxs, L,i, j)  private(i, j)
-    for (i = 0; i < xsize; ++i) {
+      
+    bool flag=false;
+      
+#pragma omp parallel for private(xss, ess, flag) shared(ees, xxs, N, xlower, xinter, elower, einter, xsize, g, w)
+    for (int i = 0; i < xsize; ++i) {
         xss = xlower + i * xinter / xsize;
-        for (j = 0; j < xsize; ++j) {
+        for (int j = 0; j < xsize; ++j) {
 	    ess = elower + j * einter / xsize;
-            L = getCholesky(ess, g, w, xss);
-            if (!L.non_phys) {
-	       ees[i*xsize+j]=ess;
-	       xxs[i*xsize+j]=xss;  
-	        // std::cout<<"ess: "<<ess<<std::endl;
-	        // std::cout<<"ees array: "<<ees[i+j]<<std::endl;
+	    flag=getCholesky(ess,xss, N);
+	    //std::cout<<"flag "<<flag<<std::endl;
+            if(!flag) {
+	      ees[i*xsize+j]=ess;
+	      xxs[i*xsize+j]=xss;  
+	    //     // std::cout<<"ess: "<<ess<<std::endl;
+	    //     // std::cout<<"ees array: "<<ees[i+j]<<std::endl;
             }  
 	}
     }
-   
+           
     std::ofstream xsfile("xs.txt");
     std::ofstream esfile("es.txt");
     std::ofstream gridfile("grid.txt");
    
-    gridfile << n << " " << xsize << std::endl;
-    /// #pragma omp barrier
-    ///#pragma omp single
+    gridfile << N << " " << xsize << std::endl;
    
-    for (i=0; i < xsize; ++i){
-        for (j = 0; j < xsize; ++j) {
+    for (int i=0; i < xsize; ++i){
+        for (int j = 0; j < xsize; ++j) {
 	  xsfile<< xxs[i*xsize+j] <<" "<< std::endl;
 	  esfile<< ees[i*xsize+j] <<" "<< std::endl;
 	}
@@ -158,6 +143,5 @@ int main() {
     delete[] ees;
     delete[] xxs; 
     const auto endTime = high_resolution_clock::now();
-    print_time(startTime, endTime);
     return 0;
 }
