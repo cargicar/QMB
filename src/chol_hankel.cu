@@ -1,4 +1,3 @@
-/* from https://stackoverflow.com/questions/29196139/cholesky-decomposition-with-cuda */
 
 /* To compile: nvcc -o main main.cu -O3 -std=c++17 -lcublas -lcusolver -Xcompiler -fopenmp
 */
